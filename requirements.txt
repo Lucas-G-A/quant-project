@@ -4,3 +4,5 @@ matplotlib
 yfinance
 scipy
 statsmodels
+alpaca-py
+python-dotenv
