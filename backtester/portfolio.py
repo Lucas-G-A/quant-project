@@ -20,24 +20,27 @@ class Portfolio:
         commission = trade_value * self.commission_pct
 
         if side == "buy":
+            # "buy" can mean: opening a long, OR covering (closing) a short
             total_cost = trade_value + commission
             if total_cost > self.cash:
-                # Not enough cash — for now, just skip the trade.
-                # (Later we could size positions to respect this.)
                 print(f"Insufficient cash to buy {shares} {ticker}, skipping.")
                 return
             self.cash -= total_cost
             self.positions[ticker] = self.positions.get(ticker, 0) + shares
 
         elif side == "sell":
+            # "sell" can mean: closing a long, OR opening a short
             current_shares = self.positions.get(ticker, 0)
-            if shares > current_shares:
-                print(f"Trying to sell {shares} {ticker} but only holding {current_shares}, skipping.")
-                return
             proceeds = trade_value - commission
+
+            if shares > current_shares:
+                # Selling more than we hold = going short on the difference
+                # (allow this now, since pairs trading requires it)
+                pass  # no restriction anymore — see note below
+
             self.cash += proceeds
-            self.positions[ticker] -= shares
-            if self.positions[ticker] == 0:
+            self.positions[ticker] = self.positions.get(ticker, 0) - shares
+            if self.positions.get(ticker) == 0:
                 del self.positions[ticker]
 
     def total_value(self, prices_today: dict) -> float:
