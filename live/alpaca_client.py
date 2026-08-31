@@ -1,4 +1,7 @@
+# live/alpaca_client.py
 import os
+import time
+import pandas as pd
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -30,15 +33,29 @@ def submit_order(ticker: str, shares: float, side: str):
     )
     return trading_client.submit_order(order)
 
-def get_recent_bars(tickers: list, lookback_days: int):
-    # Pull extra calendar days to comfortably cover lookback_days worth of
-    # TRADING days (weekends/holidays mean calendar days > trading days needed)
+def get_recent_bars(tickers: list, lookback_days: int, batch_size: int = 20, max_retries: int = 3):
     start = datetime.now() - timedelta(days=int(lookback_days * 1.6))
+    all_bars = []
 
-    request = StockBarsRequest(
-        symbol_or_symbols=tickers,
-        timeframe=TimeFrame.Day,
-        start=start
-    )
-    bars = data_client.get_stock_bars(request)
-    return bars.df
+    for i in range(0, len(tickers), batch_size):
+        batch = tickers[i:i + batch_size]
+
+        for attempt in range(max_retries):
+            try:
+                request = StockBarsRequest(
+                    symbol_or_symbols=batch,
+                    timeframe=TimeFrame.Day,
+                    start=start
+                )
+                bars = data_client.get_stock_bars(request)
+                all_bars.append(bars.df)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"Batch {i}-{i+batch_size} failed (attempt {attempt+1}), retrying...")
+                    time.sleep(2)
+                else:
+                    print(f"Batch {i}-{i+batch_size} failed after {max_retries} attempts: {e}")
+                    raise
+
+    return pd.concat(all_bars)

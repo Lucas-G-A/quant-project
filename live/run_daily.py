@@ -1,4 +1,7 @@
+import os
+import json
 import pandas as pd
+from datetime import datetime
 from live.alpaca_client import submit_order, get_recent_bars
 from live.shadow_portfolio import ShadowPortfolio
 from live.strategy_state import save_strategy_state, load_strategy_state
@@ -20,7 +23,17 @@ def _execute_and_log(name, decisions, price_history, portfolio):
         submit_order(ticker, shares, side)
         portfolio.execute_trade(ticker, shares, price, side)
         print(f"[{name}] {side.upper()} {shares:.2f} {ticker} @ ~{price:.2f}")
-    print(f"[{name}] Portfolio value: {portfolio.total_value(current_prices):.2f}")
+
+    value = portfolio.total_value(current_prices)
+    print(f"[{name}] Portfolio value: {value:.2f}")
+
+    # Append to running history log, used by the dashboard later
+    log_path = f"live/state/{name}_history.csv"
+    row = pd.DataFrame([{"date": price_history.index[-1], "total_value": value}])
+    if os.path.exists(log_path):
+        row.to_csv(log_path, mode="a", header=False, index=False)
+    else:
+        row.to_csv(log_path, mode="w", header=True, index=False)
 
 def run_momentum():
     name = "momentum"
@@ -71,3 +84,7 @@ def run_pairs():
 if __name__ == "__main__":
     run_momentum()
     run_pairs()
+
+    with open("live/state/last_successful_run.json", "w") as f:
+        json.dump({"timestamp": datetime.now().isoformat()}, f)
+    print("Heartbeat updated.")
