@@ -1,12 +1,12 @@
 # Quant Trading Lab
 
-A from-scratch, event-driven backtesting engine used to research and evaluate two structurally different systematic trading strategies: a **momentum** strategy and a **pairs trading (statistical arbitrage)** strategy. Built to understand market mechanics and risk from first principles, not to rely on an existing framework like `backtrader` or `zipline`.
+A from-scratch, event-driven backtesting engine used to research and evaluate two structurally different systematic trading strategies: a **momentum** strategy and a **pairs trading (statistical arbitrage)** strategy — extended from backtested research into a live, automated paper-trading system. Built to understand market mechanics and risk from first principles, not to rely on an existing framework like `backtrader` or `zipline`.
 
 ## Why event-driven, not vectorized
 
 Most quick backtests compute signals and returns across an entire dataset in one vectorized pass. This is fast, but dangerously easy to get wrong: subtle bugs can let a strategy's decision on day *N* be computed using information only available on day *N+5* — a mistake known as **look-ahead bias**, and one of the most common ways backtests silently overstate performance.
 
-This engine instead steps through history one day at a time. On each day, the strategy is handed a slice of price data containing only information up to and including that day (`price_data.iloc[:i+1]`), and must decide what to do with only that information — structurally identical to how a live trading system would operate. This is slower and more code than a vectorized approach, but it's the standard more rigorous quant research shops actually use, and it makes look-ahead bias close to impossible rather than merely "avoided if you're careful."
+This engine instead steps through history one day at a time. On each day, the strategy is handed a slice of price data containing only information up to and including that day (`price_data.iloc[:i+1]`), and must decide what to do with only that information — structurally identical to how a live trading system would operate. This is slower and more code than a vectorized approach, but it's the standard more rigorous quant research shops actually use, and it makes look-ahead bias close to impossible rather than merely "avoided if you're careful." This design choice paid off directly: the same `Strategy.decide()` interface built for backtesting was reused, almost unchanged, to drive the live trading system described below.
 
 ## Architecture
 
@@ -24,10 +24,17 @@ quant_proj/
 │   └── find_pairs.py       # Engle-Granger cointegration testing across the universe
 ├── data/
 │   └── fetch_data.py       # Historical price data via yfinance (hardcoded ticker snapshot)
-└── run_backtest*.py         # Entry-point scripts for each strategy/experiment
+├── live/
+│   ├── alpaca_client.py     # Alpaca Trading + Data API wrapper (batched, with retry logic)
+│   ├── shadow_portfolio.py   # Per-strategy portfolio tracking that persists between daily runs
+│   ├── strategy_state.py     # Persists each strategy's internal state between runs
+│   ├── run_daily.py           # Daily entry point: pulls data, runs both strategies, submits orders
+│   ├── scheduler.py            # Lightweight always-on loop that triggers run_daily at a fixed time
+│   └── health_check.py         # Reports time since the last successful run
+└── run_backtest*.py         # Entry-point scripts for each backtest experiment
 ```
 
-**Design principle:** both strategies plug into the same `Strategy` abstract base class and the same `Backtester` engine — the engine has no knowledge of which strategy it's running. This "strategy-agnostic" design meant adding a second, structurally very different strategy (long/short, event-driven entries) required zero changes to the core engine.
+**Design principle:** both strategies plug into the same `Strategy` abstract base class and the same `Backtester` engine — the engine has no knowledge of which strategy it's running. This "strategy-agnostic" design meant adding a second, structurally very different strategy (long/short, event-driven entries) required zero changes to the core engine, and later meant the live system could drive both strategies through one shared code path too.
 
 ### Realism built in from day one, not bolted on later
 - **Commission**: applied as a percentage of trade value, on every trade (both entry and exit)
@@ -64,6 +71,8 @@ Tested across two very different regimes: a trending bull market (2015–2024) a
 
 **Key finding:** no single weighting scheme dominates across regimes. Momentum-score weighting maximized returns in the trending bull market — even edging out a passive benchmark on raw return — but produced the *worst* drawdown of all variants during the 2008 crisis, since concentrating into the highest-momentum names amplifies both upside and downside. Inverse-volatility weighting sacrificed returns during the bull run but delivered genuine risk reduction during the crisis, achieving a smaller max drawdown than even the passive benchmark. This is a direct, testable illustration of the tension between risk-parity-style position sizing and momentum-chasing.
 
+**Live deployment:** the momentum-score-weighted variant (the strongest bull-market performer) is running live on paper trading — see Live Deployment below.
+
 ## Strategy 2: Pairs Trading (Statistical Arbitrage)
 
 **Core idea:** rather than betting on market direction, find two stocks with a historically stable price relationship (cointegration) and bet on temporary divergences reverting to normal — long the relatively cheap leg, short the relatively expensive one. Designed to be market-neutral: broad market moves should largely cancel out between the long and short leg.
@@ -86,19 +95,37 @@ Tested across two very different regimes: a trending bull market (2015–2024) a
 
 **Key finding:** the strategy is essentially flat after realistic transaction costs, despite the pair being strongly cointegrated and behaving as expected mechanically (average entry z-score of 2.5, clean mean-reverting exits). This is a legitimate and expected result, not a failed implementation: MA/V is exactly the kind of highly liquid, heavily-monitored pair that professional statistical arbitrage desks compete over intensely, compressing away most easily-capturable edge. Annualized volatility of 3.6% (vs. ~20% for the momentum strategies) does confirm the market-neutral property held as designed — the strategy achieves genuine diversification from market direction, even without generating excess return in this particular pair.
 
+**Live deployment:** running live on paper trading alongside momentum — see below.
+
 ## Bugs found and fixed along the way
 
 Documenting these deliberately, since debugging process is as informative as final results:
 
 1. **Insufficient cash-buffer errors**: setting `target_total_weight` close to 1.0 (fully invested) occasionally caused trades to fail, since slippage and commission push actual execution cost slightly above the computed target. Fixed by leaving a larger cash buffer (0.90 instead of 0.95).
 2. **Hedge ratio recalculating mid-trade**: the pairs trading hedge ratio was originally recalculated on a fixed schedule regardless of position state. This caused the *definition* of the spread to shift while a trade was open, producing artificial one-day z-score jumps that looked like (but were not) genuine mean reversion. Fixed by freezing the hedge ratio for the duration of any open position, only recalculating between trades.
+3. **Ticker format mismatches across data providers**: Yahoo Finance (`yfinance`) and Alpaca use different conventions for share-class tickers (`BRK-B` vs. `BRK.B`). Solved with a small conversion function applied only at the Alpaca API boundary, keeping the core universe list provider-agnostic.
+4. **Silent state loss between daily runs**: the live system runs as a fresh process each day, so any strategy state held only in memory (e.g., last rebalance month, whether a pairs position is currently open) would silently reset every run — causing momentum to attempt a rebalance every single day instead of monthly. Fixed by persisting the minimal necessary state to disk between runs.
+5. **API request batching and transient failures**: a single request for ~100 tickers' worth of historical bars occasionally failed with a dropped connection. Fixed by batching requests into smaller groups with retry-with-backoff logic — a necessary robustness measure for any unattended daily script.
+
+## Live Deployment
+
+Both strategies run live on an Alpaca paper-trading account (real market conditions and execution, simulated capital), each allocated a $50,000 notional "sleeve" tracked independently.
+
+**Architecture:**
+- A daily script (`live/run_daily.py`) pulls current market data, runs both strategies through the same `Strategy.decide()` interface used in backtesting, and submits any resulting orders to Alpaca
+- Since an Alpaca paper account is a single pool of capital rather than natively supporting independently-tracked sub-strategies, a lightweight **shadow portfolio** layer (`live/shadow_portfolio.py`) tracks each strategy's notional cash and positions separately, persisting to disk between runs — a simplified version of the "sleeve accounting" pattern real multi-strategy funds use to track individual strategies' P&L within one consolidated account
+- A background scheduler (`live/scheduler.py`) checks the time every 30 seconds and triggers the daily run automatically, after market close
+- A heartbeat file, updated at the end of every successful run, allows a simple health check (`live/health_check.py`) to confirm the system is actually running correctly rather than assuming it is
+
+**A practical lesson worth noting:** the original automation plan used macOS's native `launchd` scheduler. After extended troubleshooting (correctly-configured jobs silently failing to trigger, likely due to macOS's background task approval system throttling repeated reloads during testing), this was replaced with a simpler, fully transparent Python loop run via `nohup`. This was a deliberate engineering trade-off: less "proper" than an OS-level scheduler, but fully debuggable and observable — when it fails, it fails visibly rather than silently, which mattered more for a system meant to run unattended for weeks.
 
 ## Known limitations
 
 - **Survivorship bias**: the universe is built from a snapshot of current S&P 500 constituents, meaning companies that were delisted, went bankrupt, or were removed from the index during the backtest period are excluded. This causes both strategies' backtests to look better than a fully historically accurate universe would.
-- **No short-selling costs**: borrow fees and margin requirements are not modeled for the pairs trading strategy.
-- **Data source**: prices sourced via `yfinance` (Yahoo Finance), which can have minor data quality issues (occasional missing tickers, adjusted-close conventions) — not a fully professional-grade data feed.
+- **No short-selling costs**: borrow fees and margin requirements are not modeled for the pairs trading strategy, in either backtest or live deployment.
+- **Data source**: prices sourced via `yfinance` (Yahoo Finance) for backtesting, which can have minor data quality issues (occasional missing tickers, adjusted-close conventions) — not a fully professional-grade data feed.
 - **Period-dependency**: results are shown across two distinct regimes specifically to surface this issue, but no backtest fully generalizes beyond the periods tested.
+- **Live system uptime**: the scheduler depends on the host machine staying awake and the background process staying alive; it does not currently recover automatically from a full machine restart, so live performance may include gaps corresponding to downtime rather than deliberate no-trade decisions.
 
 ## Setup
 
@@ -106,16 +133,27 @@ Documenting these deliberately, since debugging process is as informative as fin
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+
+# Backtesting
 python data/fetch_data.py          # pulls historical price data
 python run_backtest.py              # momentum, 2015–2024
 python run_backtest_crisis.py       # momentum, 2007–2012
 python analysis/find_pairs.py       # cointegration pair discovery
 python run_backtest_pairs.py        # pairs trading, MA–V
+
+# Live paper trading
+# 1. Create a free Alpaca account and generate PAPER trading API keys
+# 2. Add ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL to a local .env file (never committed)
+python -m live.test_connection      # confirms API keys and connectivity
+python -m live.run_daily             # one manual run of both strategies
+nohup python -m live.scheduler > live/logs/scheduler.log 2>&1 &   # starts unattended daily execution
+python -m live.health_check          # confirms the system is running correctly
 ```
 
 ## Possible future work
 
-- Live paper trading via Alpaca's API to validate strategies against real-time execution
+- A Streamlit dashboard visualizing live equity curves for both strategies against their original backtest expectations
 - A lower-liquidity, less-arbitraged pair to test whether pairs trading edge is more exploitable outside of heavily-monitored large caps
 - Position-weight capping as a middle ground between equal-weight and momentum-score weighting in the momentum strategy
 - Cointegration re-testing over rolling windows, rather than a single full-sample test, to check pair stability over time
+- Automatic recovery of the live scheduler after a machine restart (e.g., revisiting a properly-configured OS-level scheduler, or a small watchdog process)
