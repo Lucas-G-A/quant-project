@@ -163,6 +163,24 @@ With aligned windows, the baseline momentum-score strategy beats the equal-weigh
 
 **Reproduce:** `python analysis/risk_controls_experiment.py` (writes `analysis/output/`). Attribution of returns to market/size/value/profitability/investment/momentum factors: `python analysis/factor_attribution.py` (downloads Ken French's factor files). Live sleeve vs SPY, equal-weight universe and a semiconductor basket: `python analysis/live_benchmark.py` (read-only, needs Alpaca keys in `.env`).
 
+## Research: pre-registered ETF momentum and trend study (Oct 2026)
+
+After the single-stock results turned out to be inflated by survivorship bias (the plain equal-weight benchmark showed about 6% a year of "alpha"), the question was re-tested on 38 liquid ETFs (US sectors, size/style, countries, bonds, commodities, REITs) from 2005 to 2026. The protocol (strategies, parameters, benchmarks, costs, statistical tests and an explicit four-part criterion for claiming alpha) was committed to git before any ETF backtest was run, and the full protocol was then run once.
+
+| Strategy | CAGR | Sharpe | Max drawdown | Alpha vs SPY+IEF (t) |
+|---|---|---|---|---|
+| S1 Cross-sectional momentum (top 5 of 37 ETFs) | 10.1% | 0.49 | -50.3% | 2.2% (0.68) |
+| S2 Time-series trend (12-1 > 0, else SHY) | 6.1% | 0.46 | -26.3% | 0.0% (0.02) |
+| S3 Dual momentum | 9.9% | 0.48 | -50.3% | 2.0% (0.62) |
+| S4 Risk-managed dual momentum | 9.2% | 0.46 | -47.8% | 1.5% (0.49) |
+| B1 SPY buy & hold | 10.8% | 0.55 | -54.4% | -0.0% (-0.48) |
+| B2 60/40 SPY/IEF | 8.0% | 0.63 | -31.6% | -0.1% (-0.86) |
+| B3 Equal-weight ETF universe | 8.5% | 0.51 | -45.7% | -0.6% (-0.52) |
+
+Full period 2005-03 to 2026-10, 5 bps slippage, one-day execution lag. Alpha from a regression on SPY and IEF excess returns with Newey-West t-statistics.
+
+**Result: no evidence of alpha.** None of the 13 configurations tested (4 strategies plus a lookback grid) met the pre-registered criterion; the best had a t-statistic of 1.08 against a required 2.0. None beat SPY or a 60/40 portfolio on Sharpe ratio, and the bootstrap confidence intervals include zero. The trend filter reduced drawdowns as designed (2008: -10.7% vs -36.2% for SPY) but a plain 60/40 delivers a similar return per unit of drawdown. The full write-up, including a flaw I found in my own criterion after seeing the results, is in [`research/etf_momentum_results.md`](research/etf_momentum_results.md); the protocol is in [`research/etf_momentum_protocol.md`](research/etf_momentum_protocol.md). Reproduce with `python analysis/run_etf_experiment.py`.
+
 ## Known limitations
 
 - **Survivorship bias**: the universe is built from a snapshot of current S&P 500 constituents, meaning companies that were delisted, went bankrupt, or were removed from the index during the backtest period are excluded. This causes both strategies' backtests to look better than a fully historically accurate universe would.

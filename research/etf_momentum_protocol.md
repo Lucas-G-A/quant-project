@@ -123,4 +123,4 @@ stock-momentum work).
 
 ## Deviations
 
-(none yet; any change made after seeing real results will be listed here)
+(none. The protocol was run once as written. Post-results observations, including a weakness in check 3 of the criterion, are in `research/etf_momentum_results.md` and did not change any result.)
