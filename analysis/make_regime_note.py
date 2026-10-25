@@ -58,6 +58,23 @@ for name in ("S1", "S2", "B1", "B2c"):
     r = mon[f"confirmatory:{name}"].dropna(); f = fl.reindex(r.index).fillna(False)
     ctx[name] = (np.prod(1 + r) - 1, np.prod(1 + r[f]) - 1, np.prod(1 + r[~f]) - 1)
 
+from analysis.factor_attribution import ols_hac
+_rf = pd.read_csv(os.path.join(ROOT, "data", "ff_factors_daily.csv"), index_col=0, parse_dates=True)["RF"] / 100
+_rfm = monthly_rf(_rf)
+_ex = pd.read_csv(os.path.join(ROOT, "data", "prices_etf.csv"), index_col=0, parse_dates=True)
+_spy = pd.concat([month_end(pre["SPY"]).pct_change(), month_end(_ex["SPY"]).pct_change()])
+_spy = _spy[~_spy.index.duplicated(keep="last")]
+
+def gamma_pooled(sid, drop_worst=0):
+    y = pd.concat([mon[f"confirmatory:{sid}"], mon[f"exploratory:{sid}"]]).dropna()
+    y = y[~y.index.duplicated()]
+    d = pd.concat([y - _rfm.reindex(y.index), _spy.reindex(y.index) - _rfm.reindex(y.index)], axis=1).dropna()
+    d.columns = ["y", "x"]
+    d = d.drop(index=d["x"].sort_values().index[:drop_worst])
+    r = ols_hac(d["y"].values, np.column_stack([d["x"], np.maximum(-d["x"], 0)]), 3)
+    return r["beta"][2], r["t"][2]
+
+rob = {k: gamma_pooled("S1", k) for k in (0, 1, 3)}
 p_s1 = h1[(h1.strategy == "S1") & (h1["sample"] == "pooled")].iloc[0]
 p_s3d = h2[(h2.strategy == "S3") & (h2["sample"] == "pooled")].iloc[0]
 p_s4d = h2[(h2.strategy == "S4") & (h2["sample"] == "pooled")].iloc[0]
@@ -132,7 +149,7 @@ So S2 limited losses relative to SPY during the dot-com bust but did about as we
 
 1. **S2 was defensive, not convex.** Its monthly volatility in bear months was {pc(vol('confirmatory','S2',True)['std'])} (confirmatory) and {pc(vol('exploratory','S2',True)['std'])} (exploratory), against {pc(vol('confirmatory','B1',True)['std'])} and {pc(vol('exploratory','B1',True)['std'])} for SPY, and its worst bear-month loss was far smaller ({pc(vol('confirmatory','S2',True)['worst'])} and {pc(vol('exploratory','S2',True)['worst'])} against {pc(vol('confirmatory','B1',True)['worst'])} and {pc(vol('exploratory','B1',True)['worst'])} for SPY). Relative to a 60/40 cash portfolio it was about the same in the confirmatory bear months and worse in the exploratory ones.
 2. **A plausible but untested explanation:** a monthly rebalance on a 12-1 month signal reacts slowly, so it may exit only after much of a fast decline has happened, which would fit the absence of convexity. I did not test this.
-3. **Post-results observation (not pre-registered): the cross-sectional momentum strategies look anti-convex.** For S1, S3 and S4 the down-market coefficient is about -0.4 in every sample (pooled t = {p_s1.t_gamma:+.2f} for S1), i.e. they lose more per unit of market decline when the market is falling than they gain when it rises. In the pooled sample their active return in bear months is also lower than in other months (S3 D = {pc(p_s3d.D)} with a 95% interval of [{pc(p_s3d.ci_low)}, {pc(p_s3d.ci_high)}], S4 D = {pc(p_s4d.D)} with [{pc(p_s4d.ci_low)}, {pc(p_s4d.ci_high)}]). This is consistent with the "momentum crash" literature (Daniel and Moskowitz, 2016). The study reports 12 H1 and 12 H2 strategy-sample combinations in total, so treat it as a hypothesis for a future pre-registered study, not a finding.
+3. **Post-results observation (not pre-registered): the cross-sectional momentum strategies look anti-convex.** For S1, S3 and S4 the down-market coefficient is about -0.4 in every sample (pooled t = {p_s1.t_gamma:+.2f} for S1), i.e. they lose more per unit of market decline when the market is falling than they gain when it rises. In the pooled sample their active return in bear months is also lower than in other months (S3 D = {pc(p_s3d.D)} with a 95% interval of [{pc(p_s3d.ci_low)}, {pc(p_s3d.ci_high)}], S4 D = {pc(p_s4d.D)} with [{pc(p_s4d.ci_low)}, {pc(p_s4d.ci_high)}]). This is consistent with the "momentum crash" literature (Daniel and Moskowitz, 2016). The study reports 12 H1 and 12 H2 strategy-sample combinations in total, so treat it as a hypothesis for a future pre-registered study, not a finding. Post-hoc robustness check: excluding October 2008 (S1 lost 24.6% when SPY fell 16.5%) moves S1's coefficient from {rob[0][0]:+.2f} (t = {rob[0][1]:+.2f}; this check uses the 316 months with complete data, hence the small difference from the table above) to {rob[1][0]:+.2f} (t = {rob[1][1]:+.2f}), and excluding the three worst SPY months gives {rob[3][0]:+.2f} (t = {rob[3][1]:+.2f}). The sign is stable, but the significance is borderline and leans on a few crisis months.
 
 ## Limitations
 
@@ -166,8 +183,9 @@ for ax, sid in zip(axes, ["S2", "S1"]):
     c = np.linalg.lstsq(A, d["y"].values, rcond=None)[0]
     xs = np.linspace(d["x"].min(), d["x"].max(), 200)
     ax.scatter(d["x"], d["y"], s=10, alpha=0.45, color="#555555")
-    ax.plot(xs, c[0] + c[1] * xs + c[2] * np.maximum(-xs, 0), color="#d95f0e", lw=2)
-    ax.plot(xs, c[0] + c[1] * xs, color="#2c7fb8", lw=1, ls="--")
+    ax.plot(xs, c[0] + c[1] * xs + c[2] * np.maximum(-xs, 0), color="#d95f0e", lw=2, label="fitted line with down-market term")
+    ax.plot(xs, c[0] + c[1] * xs, color="#2c7fb8", lw=1, ls="--", label="upside slope extended (no kink)")
+    ax.legend(fontsize=7, loc="upper left")
     ax.axhline(0, color="k", lw=0.5); ax.axvline(0, color="k", lw=0.5)
     row = h1[(h1.strategy == sid) & (h1["sample"] == "pooled")].iloc[0]
     ax.set_title(f"{NICE[sid]}\nconvexity gamma = {row.gamma:+.2f} (t = {row.t_gamma:+.2f}; positive would mean convex)", fontsize=9)
