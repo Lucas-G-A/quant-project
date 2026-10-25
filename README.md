@@ -119,6 +119,50 @@ Both strategies run live on an Alpaca paper-trading account (real market conditi
 
 **A practical lesson worth noting:** the original automation plan used macOS's native `launchd` scheduler. After extended troubleshooting (correctly-configured jobs silently failing to trigger, likely due to macOS's background task approval system throttling repeated reloads during testing), this was replaced with a simpler, fully transparent Python loop run via `nohup`. This was a deliberate engineering trade-off: less "proper" than an OS-level scheduler, but fully debuggable and observable — when it fails, it fails visibly rather than silently, which mattered more for a system meant to run unattended for weeks.
 
+## Update (Oct 2026): window-alignment correction and risk-controls experiment
+
+### Correction to the comparison tables above
+
+The tables above compare strategy equity curves that include a 273-trading-day cash-only warm-up (the 12-1 signal needs about a year of history) against a buy-and-hold benchmark that is invested from day one, so strategies and benchmark were not measured over the same dates. Everything below measures both from the same start date (the day before the strategy's first trade): 2016-02-02 for the 2015-2024 run and 2008-02-01 for the 2007-2012 run. Re-running the unchanged baseline strategy reproduces the earlier strategy numbers exactly; only the benchmark window and the Sharpe/volatility denominators change.
+
+With aligned windows, the baseline momentum-score strategy beats the equal-weight benchmark on total return in both periods (779% vs 659%; 58.6% vs 52.6%). Its Sharpe is slightly lower in the bull run (1.09 vs 1.14) and about equal in the crisis run (0.49 vs 0.47). Its maximum drawdown is smaller than the benchmark's in the bull run (-31.4% vs -35.8%) but worse in the crisis run (-50.0% vs -45.4%). The earlier statement that buy-and-hold clearly won the 2007-2012 period on return and Sharpe (87% / 0.55) does not survive alignment.
+
+### Risk controls: position cap, sector cap, drawdown rule
+
+`MomentumStrategy` gained three optional controls, all off by default (default behavior verified identical to the original on all six weighting/period combinations): `max_position_weight`, `max_sector_weight` (with the sector map in `data/sectors.py`) and a daily drawdown rule (`drawdown_trigger`, `drawdown_scale`, `drawdown_reentry`). Four variants were fixed before running and not tuned; all are reported. Momentum-score weighting, 90% target exposure, costs included (turnover roughly 4x to 6x per year depending on the variant).
+
+**2015-2024 (aligned window 2016-02-02 to 2024-12-30, 98 tickers)**
+
+| Variant | Total return | CAGR | Sharpe | Ann. vol | Max drawdown | Worst 10-day | Calmar |
+|---|---|---|---|---|---|---|---|
+| A. Baseline (no controls) | 779.1% | 27.7% | 1.09 | 25.4% | -31.4% | -24.1% | 0.88 |
+| B. Position cap 10% | 465.9% | 21.5% | 0.95 | 23.3% | -31.0% | -24.0% | 0.69 |
+| C. B + sector cap 30% | 414.3% | 20.2% | 0.96 | 21.7% | -30.9% | -24.1% | 0.65 |
+| D. C + drawdown rule | 188.2% | 12.6% | 0.85 | 15.4% | -20.7% | -12.1% | 0.61 |
+| Benchmark: equal-weight buy & hold | 659.3% | 25.6% | 1.14 | 22.2% | -35.8% | -23.8% | 0.72 |
+| Control: baseline held at 45% invested | 214.2% | 13.7% | 1.08 | 12.6% | -16.5% | -12.2% | 0.83 |
+
+**2007-2012 holdout (aligned window 2008-02-01 to 2012-12-28, 88 tickers)**
+
+| Variant | Total return | CAGR | Sharpe | Ann. vol | Max drawdown | Worst 10-day | Calmar |
+|---|---|---|---|---|---|---|---|
+| A. Baseline (no controls) | 58.6% | 9.9% | 0.49 | 26.2% | -50.0% | -22.0% | 0.20 |
+| B. Position cap 10% | 47.9% | 8.3% | 0.44 | 25.0% | -45.7% | -22.0% | 0.18 |
+| C. B + sector cap 30% | 45.6% | 8.0% | 0.43 | 24.9% | -45.7% | -22.0% | 0.17 |
+| D. C + drawdown rule | 12.7% | 2.5% | 0.24 | 14.5% | -31.2% | -11.0% | 0.08 |
+| Benchmark: equal-weight buy & hold | 52.6% | 9.0% | 0.47 | 25.3% | -45.4% | -23.4% | 0.20 |
+| Control: baseline held at 45% invested | 28.6% | 5.3% | 0.45 | 13.2% | -30.7% | -11.1% | 0.17 |
+
+**Findings**
+
+1. **The caps reduced return more than they reduced risk.** In the bull run the 10% position cap cut CAGR from 27.7% to 21.5% and Sharpe from 1.09 to 0.95 while max drawdown moved only from -31.4% to -31.0%; the worst 10-day loss stayed near -24% in variants A to C, because it comes from market-wide crashes that caps cannot diversify away. In the crisis holdout the caps trimmed max drawdown from -50.0% to -45.7% at a cost of 11 to 13 points of total return.
+2. **The drawdown rule, as specified, did not work.** It cut max drawdown (-31.4% to -20.7%; -50.0% to -31.2%) but spent 57% of days (bull) and 81% of days (crisis) at half exposure, with single stretches of 2.1 and 2.6 years, because re-entry requires recovering to within 5% of the all-time peak while holding half the book. A control that simply holds the baseline at 45% invested had higher return, higher Sharpe and higher Calmar than the rule in both periods, so the rule was dominated by just running a smaller position.
+3. **No variant improved risk-adjusted return over the uncapped baseline.** The caps and the rule act as risk dials, not free improvements.
+
+**Caveats.** The universe has survivorship bias (stocks that were later successful are in the sample), which probably flatters the uncapped, concentrated version and overstates the cost of the caps. Results come from one historical path per period, two periods only, and a current-snapshot sector map. The drawdown rule's state (peak value, de-risk flag) is not persisted by the live runner, so it must not be deployed as is. None of this is deployed: the live paper-trading strategy is unchanged.
+
+**Reproduce:** `python analysis/risk_controls_experiment.py` (writes `analysis/output/`). Attribution of returns to market/size/value/profitability/investment/momentum factors: `python analysis/factor_attribution.py` (downloads Ken French's factor files). Live sleeve vs SPY, equal-weight universe and a semiconductor basket: `python analysis/live_benchmark.py` (read-only, needs Alpaca keys in `.env`).
+
 ## Known limitations
 
 - **Survivorship bias**: the universe is built from a snapshot of current S&P 500 constituents, meaning companies that were delisted, went bankrupt, or were removed from the index during the backtest period are excluded. This causes both strategies' backtests to look better than a fully historically accurate universe would.
