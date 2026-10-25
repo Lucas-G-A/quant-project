@@ -80,4 +80,4 @@ estimate is reported as a summary but does not decide confirmation.
 
 ## Deviations
 
-(none yet)
+(none. The protocol was run once as written. A bug found in the synthetic self-test before the real run, duplicate months when pooling the two samples, was fixed before any real result existed. Post-results observations are in `research/regime_study_results.md` and did not change any result.)
