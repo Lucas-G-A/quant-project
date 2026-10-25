@@ -104,6 +104,23 @@ stock-momentum work).
 - The prior single-stock momentum work informs the expectation that momentum has positive loadings
   on the known factor, but no parameter here was chosen from those results.
 
+## Clarifications made before the real run (2026-10-24; no ETF strategy result seen yet)
+
+1. **Interpretation rule (R4).** The four-part criterion measures alpha against SPY and IEF only, so a
+   plain diversified portfolio holding gold, commodities, emerging markets and REITs could pass it by
+   collecting asset-class premia, not by momentum or trend skill. I therefore also report R4: strategy
+   excess return regressed on the excess return of B3 (equal-weight universe). A strategy that meets the
+   four-part criterion but has R4 alpha t < 2.0 will be described as "alpha against SPY/IEF explained by
+   broad diversification", NOT as evidence of momentum or trend skill. R4 does not change the four checks.
+2. **Bootstrap scope.** Bootstrap CIs are computed for the four 12-month core strategies (S1-S4) against
+   B1 and B2 over full, design and holdout periods. The grid variants are covered by the regressions and
+   by the deflated Sharpe ratio (which counts all 13 configurations).
+3. **Execution guard.** Rebalance buys are scaled down proportionally if slippage would otherwise make
+   them exceed available cash, so no rebalance is rejected. Rejected-trade counts are still reported.
+4. **Start dates (from data availability, not performance).** First rebalance 2005-03-01, evaluation
+   start 2005-02-28 (30 ETFs eligible).
+5. **Pipeline testing** was done only on synthetic data (`--selftest`); the real run is executed once.
+
 ## Deviations
 
-(none yet)
+(none yet; any change made after seeing real results will be listed here)
